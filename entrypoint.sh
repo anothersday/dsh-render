@@ -51,22 +51,70 @@ else
   echo "public domain. Set DSH_PUBLIC_URL and redeploy." >&2
 fi
 
+# --- Preflight (v2 diagnostics) -------------------------------------------
+# Prove the runtime works as the unprivileged node user before starting
+# the real service, so a failure here names its own cause in the log.
+echo "=== dsh preflight ==="
+gosu node sh -c '
+  echo "user=$(whoami) HOME=$HOME DSH_HOME=${DSH_HOME:-unset}"
+  node --version
+  dsh --version
+  for d in "$DSH_HOME" "$HOME" "${DSH_WORKSPACE:-/data/workspace}"; do
+    if touch "$d/.write-test" 2>/dev/null; then
+      echo "writable: $d"; rm -f "$d/.write-test"
+    else
+      echo "NOT writable: $d"
+    fi
+  done
+' || echo "WARNING: preflight reported problems (see above)"
+df -h /data 2>/dev/null | tail -1 || true
+free -m | head -2 || true
+echo "=== dsh preflight done ==="
+
 # dsh runs as the unprivileged node user; its state is under $DSH_HOME.
-gosu node dsh "${DSH_ARGS[@]}" &
+# v2: capture dsh's output to a file AND stream it to the container log.
+# If dsh dies during startup, dump the whole file plus diagnostics —
+# v1 relied on the output having reached the log on its own, and in
+# practice nothing showed up between the start line and the error.
+DSH_LOG=/tmp/dsh.log
+: > "$DSH_LOG"
+gosu node dsh "${DSH_ARGS[@]}" >>"$DSH_LOG" 2>&1 &
 DSH_PID=$!
+tail -f "$DSH_LOG" &
+TAIL_PID=$!
+
+dump_dsh_failure() {
+  kill "$TAIL_PID" 2>/dev/null || true
+  echo "ERROR: dsh exited during startup." >&2
+  echo "=== dsh log (complete) ===" >&2
+  cat "$DSH_LOG" >&2 || true
+  echo "=== dsh log end ===" >&2
+  echo "--- state: ls -la \$DSH_HOME, free, df ---" >&2
+  ls -la "$DSH_HOME" 2>&1 | head -20 >&2 || true
+  free -m 2>/dev/null | head -2 >&2 || true
+  df -h /data 2>/dev/null | tail -1 >&2 || true
+}
 
 # Make sure a container stop takes dsh down with Caddy, and vice versa.
-trap 'kill "$DSH_PID" 2>/dev/null || true' EXIT
-for _ in $(seq 1 60); do
+trap 'kill "$DSH_PID" "$TAIL_PID" 2>/dev/null || true' EXIT
+UP=0
+for _ in $(seq 1 90); do
   # dsh answers 401 on / without its token — a response at all means "up"
   # (curl still exits 0; a refused connection exits non-zero).
-  if curl -s -o /dev/null "http://127.0.0.1:${DSH_PORT}/"; then break; fi
+  if curl -s -o /dev/null "http://127.0.0.1:${DSH_PORT}/"; then UP=1; break; fi
   if ! kill -0 "$DSH_PID" 2>/dev/null; then
-    echo "ERROR: dsh exited during startup; see its log lines above." >&2
+    sleep 1  # let the final log lines flush into the file
+    dump_dsh_failure
     exit 1
   fi
   sleep 1
 done
+if [ "$UP" != 1 ]; then
+  echo "ERROR: dsh did not answer on 127.0.0.1:${DSH_PORT} within 90s" >&2
+  echo "but its process is still running — dumping its log:" >&2
+  cat "$DSH_LOG" >&2 || true
+  exit 1
+fi
 
 echo "dsh is up on 127.0.0.1:${DSH_PORT}; Caddy listening on :${PORT}"
 echo "First login: find the 'http(s)://.../?token=...' line in the dsh log"
@@ -75,5 +123,5 @@ echo "(user: ${DSH_UI_USERNAME}). The token changes on every restart."
 
 caddy run --config /etc/caddy/Caddyfile --adapter caddyfile &
 CADDY_PID=$!
-trap 'kill "$DSH_PID" "$CADDY_PID" 2>/dev/null || true' EXIT
+trap 'kill "$DSH_PID" "$CADDY_PID" "$TAIL_PID" 2>/dev/null || true' EXIT
 wait -n "$DSH_PID" "$CADDY_PID"
