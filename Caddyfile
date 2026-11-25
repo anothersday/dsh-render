@@ -1,0 +1,30 @@
+# Caddy is the only process listening on a public port in this container.
+# It holds Render's $PORT, gates everything behind HTTP Basic Auth, and
+# reverse-proxies to dsh on loopback (127.0.0.1:3080).
+#
+# Placeholders are filled from the environment at startup:
+#   {$PORT}                  set by Render automatically (default 10000)
+#   {$DSH_UI_USERNAME}       set in render.yaml (default: admin)
+#   {$DSH_UI_PASSWORD_HASH}  computed by entrypoint.sh from DSH_UI_PASSWORD
+#                            with `caddy hash-password` — the plain password
+#                            itself never appears in this file.
+
+:{$PORT:10000} {
+	# Render's health check (healthCheckPath in render.yaml).
+	# Answered by Caddy itself, without auth, and reveals nothing.
+	handle /healthz {
+		respond "ok" 200
+	}
+
+	handle {
+		basic_auth {
+			{$DSH_UI_USERNAME:admin} {$DSH_UI_PASSWORD_HASH}
+		}
+		reverse_proxy 127.0.0.1:3080
+	}
+
+	log {
+		output stdout
+		format console
+	}
+}

@@ -1,0 +1,41 @@
+# Render Blueprint — https://render.com/docs/blueprint-spec
+# In the Render dashboard: New > Blueprint, select the GitHub repo that
+# contains this file, and Render creates the service below. Values marked
+# sync: false are asked for once at creation and stored as secrets by
+# Render; they are never committed to git.
+services:
+  - type: web
+    name: dsh
+    runtime: docker
+    # dsh idles at ~430 MB on its own host and needs headroom while an
+    # agent works, so the 512 MB Starter plan is too tight. Standard
+    # (2 GB) is the comfortable floor. A paid plan is also required for
+    # the persistent disk below — Free services cannot have one and
+    # spin down after 15 minutes idle.
+    plan: standard
+    # Closest Render region to China. Others: oregon, ohio, virginia,
+    # frankfurt.
+    region: singapore
+    healthCheckPath: /healthz
+    disk:
+      name: dsh-data
+      mountPath: /data
+      sizeGB: 2
+    envVars:
+      - key: DSH_UI_USERNAME
+        value: admin
+      # The ONLY gate in front of a shell-capable agent. Use a long,
+      # unique password and store it in your password manager.
+      - key: DSH_UI_PASSWORD
+        sync: false
+      # Optional at deploy time: if left empty, paste the key after
+      # first login under Settings -> Models instead.
+      - key: DEEPSEEK_API_KEY
+        sync: false
+      # Optional: entrypoint falls back to RENDER_EXTERNAL_URL, which
+      # Render sets automatically. Only set this when you attach a
+      # custom domain, e.g. https://dsh.example.com
+      - key: DSH_PUBLIC_URL
+        sync: false
+      - key: DSH_TELEMETRY_MODE
+        value: DISABLED

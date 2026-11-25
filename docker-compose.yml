@@ -1,0 +1,18 @@
+# Local smoke test only — Render ignores this file.
+# Usage: DSH_UI_PASSWORD='a-long-test-password' docker compose up --build
+# Then open the token URL from the logs (http://127.0.0.1:10000/?token=...)
+services:
+  dsh:
+    build: .
+    ports:
+      - "10000:10000"
+    environment:
+      PORT: "10000"
+      DSH_UI_USERNAME: admin
+      DSH_UI_PASSWORD: "${DSH_UI_PASSWORD:?set DSH_UI_PASSWORD first}"
+      DSH_PUBLIC_URL: "http://127.0.0.1:10000"
+      DEEPSEEK_API_KEY: "${DEEPSEEK_API_KEY:-}"
+    volumes:
+      - dsh-data:/data
+volumes:
+  dsh-data:
